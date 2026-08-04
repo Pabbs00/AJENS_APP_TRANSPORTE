@@ -21,6 +21,7 @@ if 'frota_padrao' not in st.session_state:
         {"Veículo": "Micro-ônibus", "Vagas": 30, "Horário": "21:30", "Motorista": "Romário"},
         {"Veículo": "Micro-ônibus", "Vagas": 28, "Horário": "21:30", "Motorista": "George"},
         {"Veículo": "Van", "Vagas": 15, "Horário": "22:00", "Motorista": "Anselmo"},
+        {"Veículo": "Van", "Vagas": 15, "Horário": "22:00", "Motorista": "Daniel"},
         {"Veículo": "Van", "Vagas": 15, "Horário": "22:00", "Motorista": "Higor"}
     ])
 
