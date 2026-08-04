@@ -15,7 +15,7 @@ st.markdown("Configure cada veículo individualmente abaixo. Você pode **adicio
 
 if 'frota_padrao' not in st.session_state:
     st.session_state.frota_padrao = pd.DataFrame([
-        {"Veículo": "Ônibus", "Vagas": 45, "Horário": "21:30", "Motorista": "Cláudio"},
+        {"Veículo": "Ônibus", "Vagas": 46, "Horário": "21:30", "Motorista": "Cláudio"},
         {"Veículo": "Micro-ônibus", "Vagas": 30, "Horário": "21:30", "Motorista": "Romário"},
         {"Veículo": "Micro-ônibus", "Vagas": 28, "Horário": "21:30", "Motorista": "George"},
         {"Veículo": "Micro-ônibus", "Vagas": 32, "Horário": "21:30", "Motorista": "Van"},
