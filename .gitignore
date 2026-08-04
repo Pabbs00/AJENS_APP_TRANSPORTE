@@ -1,0 +1,19 @@
+# Ambiente Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Planilhas de respostas (dados pessoais dos associados - não versionar)
+*.xlsx
+*.xls
+*.csv
+!exemplo_respostas.csv
+
+# Sistema
+.DS_Store
+Thumbs.db
