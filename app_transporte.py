@@ -2,14 +2,16 @@ import streamlit as st
 import pandas as pd
 import io
 import random
+import re
 from datetime import datetime
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from collections import defaultdict
 
-# INFORMAÇÕES INICIAIS
-st.set_page_config(page_title="ROTEIROS DE TRANSPORTE - AJENS", layout="wide")
-st.title("🚌 GERADOR DE ROTEIROS - AJENS")
+# CONFIGURAÇÃO DA PÁGINA
+st.set_page_config(page_title="AJENS - ROTEIROS DE TRANSPORTE", layout="wide", page_icon="🚌")
+st.title("GERAR ROTEIROS - AJENS")
 
-# CONFIGURAÇÃO DA FROTA
+# CONFIGURAÇÃO DA FROTA PADRÃO
 st.header("CONFIGURAÇÃO DA FROTA DE HOJE")
 st.markdown("Configure cada veículo individualmente abaixo. Você pode **adicionar novas linhas**, **excluir veículos**, alterar o número de **vagas** e preencher o **nome do motorista**.")
 
@@ -38,6 +40,7 @@ frota_df = st.data_editor(
     hide_index=True
 )
 
+# FUNÇÃO DE PRIORIDADE DE VEÍCULOS
 def prioridade_veiculo(tipo):
     prio = {"Ônibus": 1, "Micro-ônibus": 2}
     return prio.get(tipo, 3)
@@ -58,13 +61,16 @@ frota_normal = sorted([v for v in frota_config if v['horario'] == '22:00'], key=
 st.divider()
 
 # UPLOAD DA PLANILHA
-st.header("PROCESSAMENTO DA PLANILHA")
+st.header("ANALISAR PLANILHA")
 st.caption("Envie o arquivo exportado das respostas do formulário Google (.xlsx ou .csv).")
 arquivo = st.file_uploader("Envie o ficheiro Excel ou CSV de respostas", type=['xlsx', 'csv'])
 
 if arquivo:
     df = pd.read_csv(arquivo) if arquivo.name.endswith('.csv') else pd.read_excel(arquivo)
     df = df.dropna(how='all')
+    
+    # CRIA O CARIMBO DE FILA COM BASE NA ORDEM DO FORMULÁRIO
+    df['ordem_preenchimento'] = range(len(df))
 
     colunas_lista = list(df.columns)
 
@@ -74,7 +80,8 @@ if arquivo:
                 return i
         return indice_padrao if indice_padrao < len(colunas_lista) else 0
 
-    st.sidebar.header("🛠️ Ajustes de Colunas")
+    # SIDEBAR DE AJUSTES DE COLUNAS
+    st.sidebar.header("AJUSTE DE COLUNAS")
     with st.sidebar.expander("Mapeamento", expanded=False):
         col_hora = st.selectbox("Data/Hora", colunas_lista, index=encontrar_indice(["CARIMBO", "HORA"], 0))
         col_nome = st.selectbox("Nome", colunas_lista, index=encontrar_indice(["NOME"], 3))
@@ -96,26 +103,85 @@ if arquivo:
     df[col_inst] = df[col_inst].str.replace("📚", "", regex=False).str.strip().str.upper()
     df[col_hora] = df[col_hora].astype(str)
 
-    # REGRAS DE ALOCAÇÃO
-    def identificar_polo(nome_inst):
-        if any(x in nome_inst for x in ["UNIGRANDE", "FATESB"]): return "UNIGRANDE"
-        if any(x in nome_inst for x in ["ANHANGUERA", "IFBA", "UFSB"]): return "ANHANGUERA"
-        if any(x in nome_inst for x in ["M1", "SÃO JUDAS"]): return "M1"
-        if any(x in nome_inst for x in ["M3", "CÉSAR BORGES"]): return "M3"
-        if "UESB" in nome_inst: return "UESB"
-        if any(x in nome_inst for x in ["EXPERT", "EVOLUA"]): return "EXPERT"
-        if "HUMBERTO" in nome_inst: return "HUMBERTO"
-        return "OUTROS"
+    # NOVAS REGRAS DE INSTITUIÇÃO MISTA (DIVIDE EM SÓ IDA E SÓ RETORNO)
+    novas_linhas = []
+    indices_remover = []
 
+    for idx, row in df.iterrows():
+        inst_clean = " ".join(str(row[col_inst]).split())
+        
+        if "IDA UNEX M1 E RETORNO UNEX M3" in inst_clean:
+            row_ida = row.copy()
+            row_ida[col_inst] = "UNEX M1 SÃO JUDAS"
+            row_ida[col_uso] = "SÓ IDA"
+            
+            row_volta = row.copy()
+            row_volta[col_inst] = "UNEX M3 CÉSAR BORGES"
+            row_volta[col_uso] = "SÓ RETORNO"
+            
+            novas_linhas.extend([row_ida, row_volta])
+            indices_remover.append(idx)
+            
+        elif "IDA UNEX M3 E RETORNO UNEX M1" in inst_clean:
+            row_ida = row.copy()
+            row_ida[col_inst] = "UNEX M3 CÉSAR BORGES"
+            row_ida[col_uso] = "SÓ IDA"
+            
+            row_volta = row.copy()
+            row_volta[col_inst] = "UNEX M1 SÃO JUDAS"
+            row_volta[col_uso] = "SÓ RETORNO"
+            
+            novas_linhas.extend([row_ida, row_volta])
+            indices_remover.append(idx)
+            
+        elif "IDA MEDICINA E RETORNO M1" in inst_clean:
+            row_ida = row.copy()
+            row_ida[col_inst] = "UNEX MEDICINA"
+            row_ida[col_uso] = "SÓ IDA"
+            
+            row_volta = row.copy()
+            row_volta[col_inst] = "UNEX M1 SÃO JUDAS"
+            row_volta[col_uso] = "SÓ RETORNO"
+            
+            novas_linhas.extend([row_ida, row_volta])
+            indices_remover.append(idx)
+
+    if indices_remover:
+        df = df.drop(indices_remover)
+        if novas_linhas:
+            df = pd.concat([df, pd.DataFrame(novas_linhas)], ignore_index=True)
+
+    # REGRAS DE ALOCAÇÃO
+    def identificar_polo(nome):
+        if "ANHANGUERA-SEDE" in nome: return "ANHANGUERA-SEDE"
+        if "ANHANGUERA-CAP" in nome: return "ANHANGUERA-CAP"
+        if any(x in nome for x in ["EXPERT", "EVOLUA"]): return "EXPERT/EVOLUA"
+        if "HUMBERTO" in nome: return "HUMBERTO RIBEIRO"
+        if "UESB" in nome: return "UESB"
+        if any(x in nome for x in ["UNEX M1", "SÃO JUDAS"]): return "M1"
+        if any(x in nome for x in ["UNEX M3", "CÉSAR BORGES"]): return "M3"
+        if "MEDICINA" in nome: return "UNEX MEDICINA"
+        if "UNIGRANDE" in nome: return "UNIGRANDE"
+        if "UFSB" in nome: return "UFSB"
+        if "IFBA" in nome: return "IFBA"
+        if "FATESB" in nome: return "FATESB"
+        if "PROCURSO" in nome: return "PROCURSO"
+
+    # MATRIZ DE MISTURA
     matriz_mistura = {
-        "UNIGRANDE": ["EXPERT", "M1", "M3", "ANHANGUERA", "UESB", "HUMBERTO", "OUTROS"],
-        "EXPERT": ["UNIGRANDE", "M1", "M3", "ANHANGUERA", "UESB", "HUMBERTO", "OUTROS"],
-        "M1": ["M3", "ANHANGUERA", "EXPERT", "UNIGRANDE", "UESB", "HUMBERTO", "OUTROS"],
-        "M3": ["ANHANGUERA", "HUMBERTO", "UESB", "M1", "EXPERT", "UNIGRANDE", "OUTROS"],
-        "UESB": ["HUMBERTO", "M3", "ANHANGUERA", "M1", "EXPERT", "UNIGRANDE", "OUTROS"],
-        "ANHANGUERA": ["M3", "HUMBERTO", "UESB", "M1", "EXPERT", "UNIGRANDE", "OUTROS"],
-        "HUMBERTO": ["UESB", "M3", "ANHANGUERA", "M1", "EXPERT", "UNIGRANDE", "OUTROS"],
-        "OUTROS": ["M1", "M3", "ANHANGUERA", "UESB", "HUMBERTO", "EXPERT", "UNIGRANDE"]
+        "M1": ["UNEX MEDICINA", "FATESB", "UNIGRANDE", "EXPERT/EVOLUA", "PROCURSO", "M3", "ANHANGUERA-SEDE", "ANHANGUERA-CAP"],
+        "UNEX MEDICINA": ["M1", "FATESB", "UNIGRANDE", "EXPERT/EVOLUA", "PROCURSO", "M3", "ANHANGUERA-SEDE"],
+        "M3": ["PROCURSO", "EXPERT/EVOLUA", "FATESB", "UNIGRANDE", "UESB", "M1", "ANHANGUERA-SEDE", "ANHANGUERA-CAP"],
+        "ANHANGUERA-SEDE": ["ANHANGUERA-CAP", "UFSB", "IFBA", "UNIGRANDE", "EXPERT/EVOLUA", "PROCURSO", "M3", "HUMBERTO RIBEIRO", "UESB", "M1"],
+        "ANHANGUERA-CAP": ["ANHANGUERA-SEDE", "UFSB", "IFBA", "UNIGRANDE", "EXPERT/EVOLUA", "PROCURSO", "M3", "HUMBERTO RIBEIRO", "UESB", "M1"],
+        "EXPERT/EVOLUA": ["PROCURSO", "FATESB", "UNIGRANDE", "M3", "HUMBERTO RIBEIRO", "UESB", "M1", "UNEX MEDICINA", "ANHANGUERA-SEDE"],
+        "PROCURSO": ["EXPERT/EVOLUA", "FATESB", "UNIGRANDE", "M3", "HUMBERTO RIBEIRO", "UESB", "M1", "UNEX MEDICINA", "ANHANGUERA-SEDE"],
+        "UNIGRANDE": ["FATESB", "EXPERT/EVOLUA", "PROCURSO", "M3", "M1", "HUMBERTO RIBEIRO", "UESB", "ANHANGUERA-SEDE"],
+        "FATESB": ["UNIGRANDE", "EXPERT/EVOLUA", "PROCURSO", "M3", "M1", "UNEX MEDICINA", "HUMBERTO RIBEIRO", "UESB", "ANHANGUERA-SEDE"],
+        "UESB": ["HUMBERTO RIBEIRO", "M3", "EXPERT/EVOLUA", "PROCURSO", "FATESB", "UNIGRANDE", "ANHANGUERA-SEDE", "ANHANGUERA-CAP", "M1"],
+        "HUMBERTO RIBEIRO": ["UESB", "M3", "EXPERT/EVOLUA", "PROCURSO", "UNIGRANDE", "ANHANGUERA-SEDE", "ANHANGUERA-CAP", "M1"],
+        "IFBA": ["ANHANGUERA-SEDE", "ANHANGUERA-CAP", "UFSB", "UNIGRANDE", "FATESB", "EXPERT/EVOLUA", "PROCURSO", "M3", "HUMBERTO RIBEIRO", "UESB", "M1"],
+        "UFSB": ["ANHANGUERA-SEDE", "ANHANGUERA-CAP", "IFBA", "HUMBERTO RIBEIRO", "UESB", "M3", "EXPERT/EVOLUA", "M1"]
     }
 
     def classificar_uso(uso_str):
@@ -126,12 +192,32 @@ if arquivo:
         if tem_ida: return (2, "SÓ IDA")
         return (3, "OUTRO")
 
+    def calcular_ocupacao(alunos_lista):
+        inst_uso = defaultdict(lambda: {'ida': 0, 'volta': 0, 'outros': 0})
+        for a in alunos_lista:
+            _, uso_desc = classificar_uso(a.get(col_uso, ''))
+            inst = a.get(col_inst, '')
+            if uso_desc == "SÓ IDA":
+                inst_uso[inst]['ida'] += 1
+            elif uso_desc == "SÓ RETORNO":
+                inst_uso[inst]['volta'] += 1
+            else:
+                inst_uso[inst]['outros'] += 1
+                
+        ocupacao_total = 0
+        for contagem in inst_uso.values():
+            pares = min(contagem['ida'], contagem['volta'])
+            sobras_ida = contagem['ida'] - pares
+            sobras_volta = contagem['volta'] - pares
+            ocupacao_total += pares + sobras_ida + sobras_volta + contagem['outros']
+        return ocupacao_total
+
     def alocar_frota_inteligente(alunos_lista, frota_disponivel):
         veiculos_utilizados = []
         alunos_restantes = list(alunos_lista)
 
-        pref_onibus = ["M1", "M3", "UESB", "HUMBERTO", "ANHANGUERA", "OUTROS", "EXPERT", "UNIGRANDE"]
-        pref_micros = ["UNIGRANDE", "EXPERT", "ANHANGUERA", "UESB", "HUMBERTO", "M3", "M1", "OUTROS"]
+        pref_onibus = ["M1", "M3", "ANHANGUERA-SEDE", "ANHANGUERA-CAP", "UNIGRANDE", "PROCURSO", "MEDICINA", "OUTROS"]
+        pref_micros = ["M1", "M3", "ANHANGUERA-SEDE","UESB", "ANHANGUERA-CAP", "UNIGRANDE", "HUMBERTO RIBEIRO", "MEDICINA", "EXPERT/EVOLUA", "PROCURSO", "FATESB", "IFBA", "UFSB", "OUTROS"]
 
         for i, veiculo in enumerate(frota_disponivel):
             if not alunos_restantes: break
@@ -145,54 +231,115 @@ if arquivo:
                 'alunos': []
             }
 
+            demanda_polos = defaultdict(int)
+            for a in alunos_restantes:
+                demanda_polos[identificar_polo(a[col_inst])] += 1
+
             ancora = None
             lista_prefs = pref_onibus if veiculo_atual['tipo'] == 'Ônibus' else pref_micros
+            
+            lista_prefs_ordenada = sorted(
+                [p for p in lista_prefs if demanda_polos[p] > 0],
+                key=lambda p: (demanda_polos[p], -lista_prefs.index(p)),
+                reverse=True
+            )
 
-            for polo in lista_prefs:
-                if any(identificar_polo(a[col_inst]) == polo for a in alunos_restantes):
-                    if veiculo_atual['tipo'] == 'Ônibus' and polo == 'UNIGRANDE':
-                        if any(identificar_polo(a[col_inst]) != 'UNIGRANDE' for a in alunos_restantes):
-                            continue
-                    ancora = polo
-                    break
+            for polo in lista_prefs_ordenada:
+                if veiculo_atual['tipo'] == 'Ônibus' and polo == 'UNIGRANDE':
+                    if any(identificar_polo(a[col_inst]) != 'UNIGRANDE' for a in alunos_restantes):
+                        continue
+                ancora = polo
+                break
 
             if not ancora and alunos_restantes: 
                 ancora = identificar_polo(alunos_restantes[0][col_inst])
 
             polos_para_puxar = [ancora] + matriz_mistura.get(ancora, [])
 
+            if veiculo_atual['horario'] == '22:00':
+                tem_medicina = (ancora == "MEDICINA") or any(identificar_polo(a[col_inst]) == "MEDICINA" for a in veiculo_atual['alunos'])
+                if tem_medicina:
+                    polos_para_puxar = [p for p in polos_para_puxar if p not in ["UESB", "M3"]]
+                if ancora in ["UESB", "M3"]:
+                    polos_para_puxar = [p for p in polos_para_puxar if p != "MEDICINA"]
+
+            polos_para_puxar = sorted(
+                list(dict.fromkeys(polos_para_puxar)), 
+                key=lambda p: (demanda_polos.get(p, 0), p == ancora), 
+                reverse=True
+            )
+
             for polo_atual in polos_para_puxar:
-                if len(veiculo_atual['alunos']) >= veiculo_atual['cap']: break
+                if demanda_polos.get(polo_atual, 0) == 0:
+                    continue
+                    
                 alunos_do_polo = [a for a in alunos_restantes if identificar_polo(a[col_inst]) == polo_atual]
 
                 for aluno in alunos_do_polo:
-                    if len(veiculo_atual['alunos']) < veiculo_atual['cap']:
+                    if calcular_ocupacao(veiculo_atual['alunos'] + [aluno]) <= veiculo_atual['cap']:
                         veiculo_atual['alunos'].append(aluno)
                         alunos_restantes.remove(aluno)
-                    else:
-                        break
 
             if veiculo_atual['alunos']:
                 veiculos_utilizados.append(veiculo_atual)
 
         return veiculos_utilizados, alunos_restantes
 
-    # PREPARAÇÃO E ALOCAÇÃO
-    df_2130 = df[df[col_retorno].str.contains("21:30", case=False, na=False)]
-    df_normal = df[~df[col_retorno].str.contains("21:30", case=False, na=False)]
+    # =========================================================================
+    # PREPARAÇÃO INICIAL DAS FILAS
+    # =========================================================================
+    df_2130 = df[df[col_retorno].str.contains("21:30", case=False, na=False)].copy()
+    df_normal = df[~df[col_retorno].str.contains("21:30", case=False, na=False)].copy()
 
+    # REGRA: Forçar Medicina para 22h (exceto se for SÓ IDA ou se a Instituição tiver "M1" no nome)
+    is_medicina_2130 = df_2130[col_inst].str.contains("MEDICINA", case=False, na=False)
+    is_so_ida = df_2130[col_uso].str.contains("SÓ IDA|SO IDA", case=False, na=False)
+    is_excecao = df_2130[col_inst].str.contains("M1", case=False, na=False) | is_so_ida
+    
+    invalids = df_2130[is_medicina_2130 & ~is_excecao]
+    df_2130 = df_2130.drop(invalids.index)
+    df_normal = pd.concat([df_normal, invalids])
+
+    # ORDENA AMBAS AS LISTAS ESTRITAMENTE PELA ORDEM DE PREENCHIMENTO DO FORMULÁRIO
+    df_2130 = df_2130.sort_values(by='ordem_preenchimento')
+    df_normal = df_normal.sort_values(by='ordem_preenchimento')
+
+    vagas_2130_total = sum(v['cap'] for v in frota_2130)
     alunos_2130 = df_2130.to_dict('records')
-    vagas_2130 = sum(v['cap'] for v in frota_2130)
 
-    contemplados_2130 = alunos_2130[:vagas_2130]
-    sobra_2130 = alunos_2130[vagas_2130:]
+    # =========================================================================
+    # PASSO 1: ANÁLISE GLOBAL E DEFINIÇÃO DA LISTA DE ESPERA (ANTES DE DIVIDIR CARROS)
+    # =========================================================================
+    contemplados_2130 = []
+    lista_espera_2130 = []
 
-    roteiros_2130, sobra_pos_2130 = alocar_frota_inteligente(contemplados_2130, frota_2130)
+    for aluno in alunos_2130:
+        # Analisa globalmente o teto de vagas considerando pares de ida/retorno
+        if calcular_ocupacao(contemplados_2130 + [aluno]) <= vagas_2130_total:
+            contemplados_2130.append(aluno)
+        else:
+            aluno['remanejado_2130'] = True
+            lista_espera_2130.append(aluno)
 
-    for aluno in sobra_2130 + sobra_pos_2130:
-        aluno['remanejado_2130'] = True
+    # =========================================================================
+    # PASSO 2: DIVIDIR OS CARROS DE 21H30 EXCLUSIVAMENTE COM OS CONTEMPLADOS
+    # =========================================================================
+    roteiros_2130, sobra_roteiro_2130 = alocar_frota_inteligente(contemplados_2130, frota_2130)
 
-    alunos_normal = sobra_2130 + sobra_pos_2130 + df_normal.to_dict('records')
+    # Se a divisão por polos deixar alguma sobra técnica, garantimos que 
+    # eles vão para o último veículo de 21:30 (pois já passaram no corte global de vagas)
+    if sobra_roteiro_2130 and roteiros_2130:
+        for aluno in sobra_roteiro_2130:
+            roteiros_2130[-1]['alunos'].append(aluno)
+    elif sobra_roteiro_2130 and not roteiros_2130:
+        for aluno in sobra_roteiro_2130:
+            aluno['remanejado_2130'] = True
+            lista_espera_2130.append(aluno)
+
+    # =========================================================================
+    # PASSO 3: INTEGRAR A LISTA DE ESPERA DIRETAMENTE NO ROTEIRO DE 22H00
+    # =========================================================================
+    alunos_normal = lista_espera_2130 + df_normal.to_dict('records')
     roteiros_normal, alunos_sem_vaga = alocar_frota_inteligente(alunos_normal, frota_normal)
 
     roteiros_prontos = roteiros_2130 + roteiros_normal
@@ -210,7 +357,7 @@ if arquivo:
     COR_PREDEFINIDA = {
         "UNIGRANDE": "FF66FF", "ANHANGUERA": "92D050", "M1": "FFC896",
         "M3": "9DC3E6", "UESB": "C6E0B4", "EXPERT": "F4B183",
-        "HUMBERTO": "B4A7D6", "OUTROS": "BFBFBF"
+        "HUMBERTO": "B4A7D6", "MEDICINA": "80CBC4", "OUTROS": "BFBFBF"
     }
 
     mapa_cores_instituicoes = {}
@@ -285,6 +432,8 @@ if arquivo:
         usos = [classificar_uso(a.get(col_uso, ''))[1] for a in rot['alunos']]
         t_ida = usos.count("IDA E RETORNO") + usos.count("SÓ IDA")
         t_volta = usos.count("IDA E RETORNO") + usos.count("SÓ RETORNO")
+        
+        ocupacao_real = calcular_ocupacao(rot['alunos'])
 
         mot = str(rot.get('motorista', '')).strip().upper()
         mot_texto = mot if mot and mot != "NAN" else "___________________________"
@@ -294,7 +443,7 @@ if arquivo:
         with coluna_atual:
             with st.container(border=True):
                 st.markdown(f"**{rot['id'].upper()}: MOTORISTA {mot_texto}**")
-                st.markdown(f"**Lotação: {len(rot['alunos'])}/{rot['cap']} | TOTAL = {t_ida} IDA, {t_volta} VOLTA**")
+                st.markdown(f"**Vagas Ocupadas: {ocupacao_real}/{rot['cap']} (Pessoas: {len(rot['alunos'])}) | {t_ida} IDA, {t_volta} VOLTA**")
 
                 for instituicao in insts:
                     cor_hex = mapa_cores_instituicoes.get(instituicao, "D9D9D9")
@@ -327,6 +476,7 @@ if arquivo:
                         if monitor_nome and aluno_nome == monitor_nome:
                             styles = ['background-color: #2E7D32; color: #FFFFFF; font-weight: bold'] * len(row)
                         elif remanejado:
+                            # SINALIZAÇÃO EM AZUL PARA ALUNOS REMANEJADOS DAS 21H30
                             if grupo in {"SÓ RETORNO", "SÓ IDA"}:
                                 styles = ['background-color: #FFFF00; color: #2563EB; font-weight: bold'] * len(row)
                             else:
@@ -341,7 +491,7 @@ if arquivo:
 
     # EXPORTAÇÃO PARA EXCEL
     st.divider()
-    st.subheader("⬇️ BAIXAR ROTEIROS EM PLANILHA EXCEL")
+    st.subheader("BAIXAR ROTEIROS EM PLANILHA EXCEL")
 
     FILL_AMARELO = PatternFill("solid", fgColor="FFFF00")
     FILL_VERDE = PatternFill("solid", fgColor="2E7D32")
@@ -400,6 +550,7 @@ if arquivo:
                         cel_c.fill = FILL_VERDE
                         cel_c.font = Font(color="FFFFFF", bold=True)
                     elif remanejado:
+                        # PLANILHA EXCEL: TEXTO EM AZUL PARA OS REMANEJADOS DAS 21H30
                         cel_c.font = Font(color="2563EB", bold=True)
                     elif grupo in {"SÓ RETORNO", "SÓ IDA"}:
                         cel_c.fill = FILL_AMARELO
@@ -418,7 +569,7 @@ if arquivo:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             wb = writer.book
-            ws = wb.create_sheet("Roteiro Geral")
+            ws = wb.create_sheet("ROTEIRO DE IDA")
             
             linha_atual = 1
             for rot in roteiros_prontos:
@@ -444,10 +595,10 @@ if arquivo:
                     ws_realocados.column_dimensions[col].width = w
 
         hoje = datetime.now()
-        nome_arquivo = f"{hoje.day:02d}/{hoje.month:02d} ROTEIRO {hoje.year}.xlsx"
+        nome_arquivo = f"{hoje.day:02d}-{hoje.month:02d}-ROTEIRO-{hoje.year}.xlsx"
 
         st.download_button(
-            label="📥 BAIXAR PLANILHA DE ROTEIROS (.xlsx)",
+            label="BAIXAR PLANILHA DE ROTEIROS (.xlsx)",
             data=output.getvalue(),
             file_name=nome_arquivo,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
