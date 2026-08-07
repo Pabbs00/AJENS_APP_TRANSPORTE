@@ -285,9 +285,7 @@ if arquivo:
 
         return veiculos_utilizados, alunos_restantes
 
-    # =========================================================================
     # PREPARAÇÃO INICIAL DAS FILAS
-    # =========================================================================
     df_2130 = df[df[col_retorno].str.contains("21:30", case=False, na=False)].copy()
     df_normal = df[~df[col_retorno].str.contains("21:30", case=False, na=False)].copy()
 
@@ -307,27 +305,20 @@ if arquivo:
     vagas_2130_total = sum(v['cap'] for v in frota_2130)
     alunos_2130 = df_2130.to_dict('records')
 
-    # =========================================================================
     # PASSO 1: ANÁLISE GLOBAL E DEFINIÇÃO DA LISTA DE ESPERA (ANTES DE DIVIDIR CARROS)
-    # =========================================================================
     contemplados_2130 = []
     lista_espera_2130 = []
 
     for aluno in alunos_2130:
-        # Analisa globalmente o teto de vagas considerando pares de ida/retorno
         if calcular_ocupacao(contemplados_2130 + [aluno]) <= vagas_2130_total:
             contemplados_2130.append(aluno)
         else:
             aluno['remanejado_2130'] = True
             lista_espera_2130.append(aluno)
 
-    # =========================================================================
-    # PASSO 2: DIVIDIR OS CARROS DE 21H30 EXCLUSIVAMENTE COM OS CONTEMPLADOS
-    # =========================================================================
+    # DIVIDIR OS CARROS DE 21H30 EXCLUSIVAMENTE COM OS CONTEMPLADOS
     roteiros_2130, sobra_roteiro_2130 = alocar_frota_inteligente(contemplados_2130, frota_2130)
 
-    # Se a divisão por polos deixar alguma sobra técnica, garantimos que 
-    # eles vão para o último veículo de 21:30 (pois já passaram no corte global de vagas)
     if sobra_roteiro_2130 and roteiros_2130:
         for aluno in sobra_roteiro_2130:
             roteiros_2130[-1]['alunos'].append(aluno)
@@ -336,9 +327,7 @@ if arquivo:
             aluno['remanejado_2130'] = True
             lista_espera_2130.append(aluno)
 
-    # =========================================================================
-    # PASSO 3: INTEGRAR A LISTA DE ESPERA DIRETAMENTE NO ROTEIRO DE 22H00
-    # =========================================================================
+    # INTEGRAR A LISTA DE ESPERA DIRETAMENTE NO ROTEIRO DE 22H00
     alunos_normal = lista_espera_2130 + df_normal.to_dict('records')
     roteiros_normal, alunos_sem_vaga = alocar_frota_inteligente(alunos_normal, frota_normal)
 
