@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import random
-import re
 from datetime import datetime
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from collections import defaultdict
@@ -256,13 +255,6 @@ if arquivo:
 
             polos_para_puxar = [ancora] + matriz_mistura.get(ancora, [])
 
-            if veiculo_atual['horario'] == '22:00':
-                tem_medicina = (ancora == "MEDICINA") or any(identificar_polo(a[col_inst]) == "MEDICINA" for a in veiculo_atual['alunos'])
-                if tem_medicina:
-                    polos_para_puxar = [p for p in polos_para_puxar if p not in ["UESB", "M3"]]
-                if ancora in ["UESB", "M3"]:
-                    polos_para_puxar = [p for p in polos_para_puxar if p != "MEDICINA"]
-
             polos_para_puxar = sorted(
                 list(dict.fromkeys(polos_para_puxar)), 
                 key=lambda p: (demanda_polos.get(p, 0), p == ancora), 
@@ -407,12 +399,12 @@ if arquivo:
         lista_espera_df.columns = ['Data/Hora', 'Nome do Associado', 'Instituição', 'Uso do Transporte', 'Bairro']
         lista_espera_df['Bairro'] = lista_espera_df['Bairro'].apply(lambda x: "" if str(x).upper() in invalidos else x)
         lista_espera_df = lista_espera_df.reset_index(drop=True)
-        st.subheader("🕒 Lista de Espera - Vagas 21:30h")
+        st.subheader("Lista de Espera - Vagas 21:30h")
         st.caption("Estes estudantes ficaram fora das vagas das 21:30h e foram remanejados para os carros das 22:00h, na ordem do preenchimento do formulário.")
         st.dataframe(lista_espera_df, use_container_width=True)
 
     # EXIBIÇÃO VISUAL DOS ROTEIROS
-    st.subheader("📋 ROTEIROS PRONTOS")
+    st.subheader("ROTEIROS PRONTOS")
     col1, col2 = st.columns(2)
 
     for idx, rot in enumerate(roteiros_prontos):
